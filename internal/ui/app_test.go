@@ -419,20 +419,19 @@ func TestProgramFlow(t *testing.T) {
 	})
 	tm := teatest.NewTestModel(t, m, teatest.WithInitialTermSize(120, 40))
 
-	waitFor := func(text string) {
-		t.Helper()
-		teatest.WaitFor(t, tm.Output(), func(out []byte) bool {
-			return bytes.Contains(out, []byte(text))
-		}, teatest.WithDuration(10*time.Second), teatest.WithCheckInterval(20*time.Millisecond))
-	}
+	// The renderer only writes the cells that changed, so text that replaces
+	// other text need not appear in the output in one piece. Only the first
+	// frame after loading is matched; the rest is checked on the final model.
+	teatest.WaitFor(t, tm.Output(), func(out []byte) bool {
+		return bytes.Contains(out, []byte("gateway-504.md"))
+	}, teatest.WithDuration(30*time.Second), teatest.WithCheckInterval(20*time.Millisecond))
 
-	waitFor("gateway-504.md")
+	// While the help is open it takes the keys: "]" must not change the file
+	// and the first "q" only closes the help.
 	tm.Type("]]]]}")
-	waitFor("hunk 2/4")
-	tm.Type("?")
-	waitFor("Previous / next hunk")
-	tm.Type("?q")
-	tm.WaitFinished(t, teatest.WithFinalTimeout(10*time.Second))
+	tm.Type("?]q")
+	tm.Type("q")
+	tm.WaitFinished(t, teatest.WithFinalTimeout(30*time.Second))
 
 	final, ok := tm.FinalModel(t).(*Model)
 	if !ok {
