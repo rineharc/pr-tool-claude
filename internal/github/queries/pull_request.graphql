@@ -1,0 +1,27 @@
+query PullRequest($owner: String!, $repo: String!, $number: Int!) {
+  repository(owner: $owner, name: $repo) {
+    pullRequest(number: $number) {
+      number
+      title
+      url
+      state
+      isDraft
+      author {
+        login
+      }
+      baseRefName
+      headRefName
+      isCrossRepository
+      headRepositoryOwner {
+        login
+      }
+      updatedAt
+      additions
+      deletions
+      changedFiles
+      commits {
+        totalCount
+      }
+    }
+  }
+}

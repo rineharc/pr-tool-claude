@@ -1,0 +1,5 @@
+* text=auto eol=lf
+
+# Fixtures are compared byte for byte; some contain CRLF line endings on purpose.
+*.diff -text
+*.golden -text

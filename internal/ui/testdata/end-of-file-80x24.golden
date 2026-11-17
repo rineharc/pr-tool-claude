@@ -1,0 +1,24 @@
+ acme/payments-api #482   Retry idempotent charge requests on gateway ti…  Open
+ mira-okafor wants to merge 6 commits into main from feature/retry-timeouts · u…
+┌─ Diff ─────────────────────────────────────────────────────────── file 5/10 ─┐
+│ internal/gateway/client.go  M +48 -12                               hunk 4/4 │
+├──────────────────────────────────────────────────────────────────────────────┤
+│        99 +                                                                  │
+│       100 + // retryableError marks an error as safe to retry.               │
+│       101 + type retryableError struct{ err error }                          │
+│       102 +                                                                  │
+│       103 + func (e retryableError) Error() string { return e.err.Error() }  │
+│       104 + func (e retryableError) Unwrap() error { return e.err }          │
+│       105 +                                                                  │
+│       106 + // retryable wraps err so that Policy.Do tries the call again.   │
+│       107 + func retryable(err error) error {                                │
+│       108 +     return retryableError{err: err}                              │
+│       109 + }                                                                │
+│       110 +                                                                  │
+│       111 + // IsRetryable reports whether err was marked with retryable.    │
+│       112 + func IsRetryable(err error) bool {                               │
+│       113 +     var r retryableError                                         │
+│       114 +     return errors.As(err, &r)                                    │
+│▌  79  115   }                                                                │
+└──────────────────────────────────────────────────────────────────────────────┘
+ j/k line · [ ] file · { } hunk · tab files · t tree · ? help · q quit

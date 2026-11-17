@@ -1,0 +1,40 @@
+ octo-org/a-repository-with-a-rather-long-name #12345   Rename things, replace the logo, and fix the line endi…  Merged
+ ghost merged 1 commit into release/2026.11 from octo-fork:tidy-up · updated 2d ago
+┌─ Files ────────────────────────────────┐┌─ Diff ───────────────────────────────────────────────────────── file 6/13 ─┐
+│ 13 files                         +19 -8││ logo.png  M                                                                │
+│                                        │├────────────────────────────────────────────────────────────────────────────┤
+│  M crlf.txt                       +1 -1││▌Binary file. There is no text diff to show.                                │
+│  A empty.txt                           ││                                                                            │
+│  D gone.txt                          -2││                                                                            │
+│  M greek.txt                      +3 -2││                                                                            │
+│  M keep.go                        +5 -1││                                                                            │
+│▸ M logo.png                            ││                                                                            │
+│  A naïve file.txt                 +1   ││                                                                            │
+│  M nonl.txt                       +1 -1││                                                                            │
+│  R pure renamed.txt                    ││                                                                            │
+│  R renamed-new.txt                +1 -1││                                                                            │
+│  M run.sh                              ││                                                                            │
+│  M sp ace.txt                     +1   ││                                                                            │
+│  A tricky.txt                     +6   ││                                                                            │
+│                                        ││                                                                            │
+│                                        ││                                                                            │
+│                                        ││                                                                            │
+│                                        ││                                                                            │
+│                                        ││                                                                            │
+│                                        ││                                                                            │
+│                                        ││                                                                            │
+│                                        ││                                                                            │
+│                                        ││                                                                            │
+│                                        ││                                                                            │
+│                                        ││                                                                            │
+│                                        ││                                                                            │
+│                                        ││                                                                            │
+│                                        ││                                                                            │
+│                                        ││                                                                            │
+│                                        ││                                                                            │
+│                                        ││                                                                            │
+├────────────────────────────────────────┤│                                                                            │
+│ M/A/D/R modified/added/deleted/renamed ││                                                                            │
+└────────────────────────────────────────┘└────────────────────────────────────────────────────────────────────────────┘
+ Showing 13 of 4200 files: GitHub lists at most 3000 files of a pull request.
+ j/k line · [ ] file · { } hunk · tab files · t tree · ? help · q quit

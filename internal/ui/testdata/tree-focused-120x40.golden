@@ -1,0 +1,40 @@
+ acme/payments-api #482   Retry idempotent charge requests on gateway timeouts                                     Open
+ mira-okafor wants to merge 6 commits into main from feature/retry-timeouts · updated 2h ago
+┌─ Files ────────────────────────────────┐┌─ Diff ───────────────────────────────────────────────────────── file 3/10 ─┐
+│ 10 files                       +407 -25││ internal/charge/idempotency.go  M +21 -6                          hunk 1/2 │
+│                                        │├────────────────────────────────────────────────────────────────────────────┤
+│  ▾ docs/runbooks/                      ││▌@@ -8,6 +8,15 @@ import (                                                  │
+│    A gateway-504.md             +38    ││    8    8       "github.com/acme/payments-api/internal/gateway"            │
+│  ▾ internal/                           ││    9    9   )                                                              │
+│▸   ▾ charge/                           ││   10   10                                                                  │
+│      M handler.go                +9  -3││        11 + // KeyResult is the outcome of reserving an idempotency key.   │
+│      M idempotency.go           +21  -6││        12 + type KeyResult int                                             │
+│    ▾ config/                           ││        13 +                                                                │
+│      M config.go                 +6    ││        14 + const (                                                        │
+│    ▾ gateway/                          ││        15 +     KeyNew      KeyResult = iota // first time this key is seen│
+│      M client.go                +48 -12││        16 +     KeyReplayed                  // seen before with the same  │
+│      M client_test.go           +96  -4││           +     ↪ payload                                                  │
+│      A retry.go                 +74    ││        17 +     KeyConflict                  // seen before with a         │
+│      A retry_test.go           +112    ││           +     ↪ different payload                                        │
+│  M go.mod                        +1    ││        18 + )                                                              │
+│  M go.sum                        +2    ││        19 +                                                                │
+│                                        ││   11   20   // KeyStore remembers which idempotency keys have been used,   │
+│                                        ││             ↪ and for what.                                                │
+│                                        ││   12   21   type KeyStore struct {                                         │
+│                                        ││   13   22       mu   sync.Mutex                                            │
+│                                        ││ @@ -19,16 +28,22 @@ func NewKeyStore() *KeyStore {                         │
+│                                        ││   19   28       return &KeyStore{seen: make(map[string][sha256.Size]byte)} │
+│                                        ││   20   29   }                                                              │
+│                                        ││   21   30                                                                  │
+│                                        ││   22      - // Reserve records key for req and reports whether the key was │
+│                                        ││           - ↪ new.                                                         │
+│                                        ││   23      - func (s *KeyStore) Reserve(key string, req                     │
+│                                        ││           - ↪ gateway.ChargeRequest) bool {                                │
+│                                        ││        31 + // Reserve records key for req and reports whether it was seen │
+│                                        ││           + ↪ before.                                                      │
+│                                        ││        32 + func (s *KeyStore) Reserve(key string, req                     │
+│                                        ││           + ↪ gateway.ChargeRequest) KeyResult {                           │
+├────────────────────────────────────────┤│        33 +     hash := payloadHash(req)                                   │
+│ M/A/D/R modified/added/deleted/renamed ││        34 +                                                                │
+└────────────────────────────────────────┘└────────────────────────────────────────────────────────────────────────────┘
+ j/k move · enter open · h/l fold · tab diff · t tree · ? help · q quit

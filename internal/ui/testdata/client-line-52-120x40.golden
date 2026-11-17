@@ -1,0 +1,40 @@
+ acme/payments-api #482   Retry idempotent charge requests on gateway timeouts                                     Open
+ mira-okafor wants to merge 6 commits into main from feature/retry-timeouts · updated 2h ago
+┌─ Files ────────────────────────────────┐┌─ Diff ───────────────────────────────────────────────────────── file 5/10 ─┐
+│ 10 files                       +407 -25││ internal/gateway/client.go  M +48 -12                             hunk 2/4 │
+│                                        │├────────────────────────────────────────────────────────────────────────────┤
+│  ▾ docs/runbooks/                      ││             ↪ The request is                                               │
+│    A gateway-504.md             +38    ││ @@ -42,9 +42,22 @@ func (c *Client) Charge(ctx context.Context, req Charge…│
+│  ▾ internal/                           ││   42   42       if err := req.Validate(); err != nil {                     │
+│    ▾ charge/                           ││   43   43           return nil, fmt.Errorf("validate charge: %w", err)     │
+│      M handler.go                +9  -3││   44   44       }                                                          │
+│      M idempotency.go           +21  -6││   45      -     resp, err := c.http.Do(ctx, c.newRequest(req))             │
+│    ▾ config/                           ││        45 +     var resp *http.Response                                    │
+│      M config.go                 +6    ││        46 +     err := c.retry.Do(ctx, func(attempt int) error {           │
+│    ▾ gateway/                          ││        47 +         httpReq := c.newRequest(req)                           │
+│▸     M client.go                +48 -12││        48 +         httpReq.Header.Set(hdrIdemKey, req.IdempotencyKey)     │
+│      M client_test.go           +96  -4││        49 +         var doErr error                                        │
+│      A retry.go                 +74    ││        50 +         resp, doErr = c.http.Do(ctx, httpReq)                  │
+│      A retry_test.go           +112    ││        51 +         if doErr != nil {                                      │
+│  M go.mod                        +1    ││▌       52 +             return retryable(doErr)                            │
+│  M go.sum                        +2    ││        53 +         }                                                      │
+│                                        ││        54 +         if resp.StatusCode == http.StatusGatewayTimeout {      │
+│                                        ││        55 +             return retryable(ErrGatewayTimeout)                │
+│                                        ││        56 +         }                                                      │
+│                                        ││        57 +         return nil                                             │
+│                                        ││        58 +     })                                                         │
+│                                        ││   46   59       if err != nil {                                            │
+│                                        ││   47      -         return nil, fmt.Errorf("gateway charge: %w", err)      │
+│                                        ││        60 +         return nil, fmt.Errorf("gateway charge after %d        │
+│                                        ││           +         ↪ attempts: %w", c.retry.Attempts(), err)              │
+│                                        ││   48   61       }                                                          │
+│                                        ││   49   62       defer resp.Body.Close()                                    │
+│                                        ││   50   63                                                                  │
+│                                        ││ @@ -53,18 +66,23 @@ func (c *Client) Charge(ctx context.Context, req Charg…│
+│                                        ││   53   66           return nil, fmt.Errorf("decode charge response: %w",   │
+│                                        ││                     ↪ err)                                                 │
+│                                        ││   54   67       }                                                          │
+├────────────────────────────────────────┤│   55   68       if resp.StatusCode >= 400 {                                │
+│ M/A/D/R modified/added/deleted/renamed ││   56      -         return nil, &Error{Status: resp.StatusCode, Code:      │
+└────────────────────────────────────────┘└────────────────────────────────────────────────────────────────────────────┘
+ j/k line · [ ] file · { } hunk · tab files · t tree · ? help · q quit

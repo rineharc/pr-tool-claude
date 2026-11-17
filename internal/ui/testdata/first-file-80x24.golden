@@ -1,0 +1,24 @@
+ acme/payments-api #482   Retry idempotent charge requests on gateway ti…  Open
+ mira-okafor wants to merge 6 commits into main from feature/retry-timeouts · u…
+┌─ Diff ─────────────────────────────────────────────────────────── file 1/10 ─┐
+│ docs/runbooks/gateway-504.md  A +38                                 hunk 1/1 │
+├──────────────────────────────────────────────────────────────────────────────┤
+│▌@@ -0,0 +1,38 @@                                                             │
+│         1 + # Runbook: gateway timeouts (504)                                │
+│         2 +                                                                  │
+│         3 + Alert: `PaymentsGatewayTimeoutRate` fires when more than 2% of   │
+│           + ↪ charge requests                                                │
+│         4 + end in a gateway timeout over five minutes.                      │
+│         5 +                                                                  │
+│         6 + ## What the service does on its own                              │
+│         7 +                                                                  │
+│         8 + A charge that times out is retried up to three times in total.   │
+│           + ↪ Every attempt                                                  │
+│         9 + carries the same `Idempotency-Key`, so the gateway treats the    │
+│           + ↪ retries as one                                                 │
+│        10 + charge and a customer is never billed twice.                     │
+│        11 +                                                                  │
+│        12 + | Attempt | Wait before it |                                     │
+│        13 + |---------|----------------|                                     │
+└──────────────────────────────────────────────────────────────────────────────┘
+ j/k line · [ ] file · { } hunk · tab files · t tree · ? help · q quit

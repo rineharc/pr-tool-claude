@@ -1,0 +1,29 @@
+{
+  "data": {
+    "repository": {
+      "pullRequest": {
+        "number": 482,
+        "title": "Retry idempotent charge requests on gateway timeouts",
+        "url": "https://github.com/acme/payments-api/pull/482",
+        "state": "OPEN",
+        "isDraft": false,
+        "author": {
+          "login": "mira-okafor"
+        },
+        "baseRefName": "main",
+        "headRefName": "feature/retry-timeouts",
+        "isCrossRepository": false,
+        "headRepositoryOwner": {
+          "login": "acme"
+        },
+        "updatedAt": "2026-11-12T09:14:00Z",
+        "additions": 407,
+        "deletions": 25,
+        "changedFiles": 10,
+        "commits": {
+          "totalCount": 6
+        }
+      }
+    }
+  }
+}

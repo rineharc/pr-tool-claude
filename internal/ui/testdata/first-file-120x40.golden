@@ -1,0 +1,40 @@
+ acme/payments-api #482   Retry idempotent charge requests on gateway timeouts                                     Open
+ mira-okafor wants to merge 6 commits into main from feature/retry-timeouts · updated 2h ago
+┌─ Files ────────────────────────────────┐┌─ Diff ───────────────────────────────────────────────────────── file 1/10 ─┐
+│ 10 files                       +407 -25││ docs/runbooks/gateway-504.md  A +38                               hunk 1/1 │
+│                                        │├────────────────────────────────────────────────────────────────────────────┤
+│  ▾ docs/runbooks/                      ││▌@@ -0,0 +1,38 @@                                                           │
+│▸   A gateway-504.md             +38    ││         1 + # Runbook: gateway timeouts (504)                              │
+│  ▾ internal/                           ││         2 +                                                                │
+│    ▾ charge/                           ││         3 + Alert: `PaymentsGatewayTimeoutRate` fires when more than 2% of │
+│      M handler.go                +9  -3││           + ↪ charge requests                                              │
+│      M idempotency.go           +21  -6││         4 + end in a gateway timeout over five minutes.                    │
+│    ▾ config/                           ││         5 +                                                                │
+│      M config.go                 +6    ││         6 + ## What the service does on its own                            │
+│    ▾ gateway/                          ││         7 +                                                                │
+│      M client.go                +48 -12││         8 + A charge that times out is retried up to three times in total. │
+│      M client_test.go           +96  -4││           + ↪ Every attempt                                                │
+│      A retry.go                 +74    ││         9 + carries the same `Idempotency-Key`, so the gateway treats the  │
+│      A retry_test.go           +112    ││           + ↪ retries as one                                               │
+│  M go.mod                        +1    ││        10 + charge and a customer is never billed twice.                   │
+│  M go.sum                        +2    ││        11 +                                                                │
+│                                        ││        12 + | Attempt | Wait before it |                                   │
+│                                        ││        13 + |---------|----------------|                                   │
+│                                        ││        14 + | 1       | none           |                                   │
+│                                        ││        15 + | 2       | 200 ms         |                                   │
+│                                        ││        16 + | 3       | 400 ms         |                                   │
+│                                        ││        17 +                                                                │
+│                                        ││        18 + Only a 504 or a transport error is retried. Declined cards are │
+│                                        ││           + ↪ not.                                                         │
+│                                        ││        19 +                                                                │
+│                                        ││        20 + ## When the alert fires                                        │
+│                                        ││        21 +                                                                │
+│                                        ││        22 + 1. Check the gateway status page and the `#gateway-incidents`  │
+│                                        ││           + ↪ channel.                                                     │
+│                                        ││        23 + 2. Open the "Payments / Gateway" dashboard and look at         │
+│                                        ││           + ↪ "Attempts per charge".                                       │
+│                                        ││        24 +    A value near 3 means the gateway is failing consistently,   │
+├────────────────────────────────────────┤│           +    ↪ not flaking.                                              │
+│ M/A/D/R modified/added/deleted/renamed ││        25 + 3. If the gateway is down, do nothing: charges fail fast with  │
+└────────────────────────────────────────┘└────────────────────────────────────────────────────────────────────────────┘
+ j/k line · [ ] file · { } hunk · tab files · t tree · ? help · q quit

@@ -1,0 +1,24 @@
+ acme/payments-api #482   Retry idempotent charge requests on gateway ti…  Open
+ mira-okafor wants to merge 6 commits into main from feature/retry-timeouts · u…
+┌─ Diff ─────────────────────────────────────────────────────────── file 5/10 ─┐
+│ internal/gateway/client.go  M +48 -12                               hunk 2/4 │
+├──────────────────────────────────────────────────────────────────────────────┤
+│             ↪ request is                                                     │
+│ @@ -42,9 +42,22 @@ func (c *Client) Charge(ctx context.Context, req ChargeRe…│
+│   42   42       if err := req.Validate(); err != nil {                       │
+│   43   43           return nil, fmt.Errorf("validate charge: %w", err)       │
+│   44   44       }                                                            │
+│   45      -     resp, err := c.http.Do(ctx, c.newRequest(req))               │
+│        45 +     var resp *http.Response                                      │
+│        46 +     err := c.retry.Do(ctx, func(attempt int) error {             │
+│        47 +         httpReq := c.newRequest(req)                             │
+│        48 +         httpReq.Header.Set(hdrIdemKey, req.IdempotencyKey)       │
+│        49 +         var doErr error                                          │
+│        50 +         resp, doErr = c.http.Do(ctx, httpReq)                    │
+│        51 +         if doErr != nil {                                        │
+│▌       52 +             return retryable(doErr)                              │
+│        53 +         }                                                        │
+│        54 +         if resp.StatusCode == http.StatusGatewayTimeout {        │
+│        55 +             return retryable(ErrGatewayTimeout)                  │
+└──────────────────────────────────────────────────────────────────────────────┘
+ j/k line · [ ] file · { } hunk · tab files · t tree · ? help · q quit

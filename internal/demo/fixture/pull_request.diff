@@ -1,0 +1,601 @@
+diff --git a/docs/runbooks/gateway-504.md b/docs/runbooks/gateway-504.md
+new file mode 100644
+index 0000000..56e2707
+--- /dev/null
++++ b/docs/runbooks/gateway-504.md
+@@ -0,0 +1,38 @@
++# Runbook: gateway timeouts (504)
++
++Alert: `PaymentsGatewayTimeoutRate` fires when more than 2% of charge requests
++end in a gateway timeout over five minutes.
++
++## What the service does on its own
++
++A charge that times out is retried up to three times in total. Every attempt
++carries the same `Idempotency-Key`, so the gateway treats the retries as one
++charge and a customer is never billed twice.
++
++| Attempt | Wait before it |
++|---------|----------------|
++| 1       | none           |
++| 2       | 200 ms         |
++| 3       | 400 ms         |
++
++Only a 504 or a transport error is retried. Declined cards are not.
++
++## When the alert fires
++
++1. Check the gateway status page and the `#gateway-incidents` channel.
++2. Open the "Payments / Gateway" dashboard and look at "Attempts per charge".
++   A value near 3 means the gateway is failing consistently, not flaking.
++3. If the gateway is down, do nothing: charges fail fast with
++   `gateway_timeout` and merchants retry with the same key.
++4. If only our traffic is affected, check the egress proxy and DNS.
++
++## Tuning
++
++| Variable                 | Default | Effect                              |
++|--------------------------|---------|-------------------------------------|
++| `GATEWAY_RETRY_ATTEMPTS` | 3       | Total tries per charge              |
++| `GATEWAY_RETRY_DELAY`    | 200ms   | Wait before the second try          |
++| `GATEWAY_TIMEOUT`        | 10s     | Budget for all attempts of a charge |
++
++Do not raise the attempts above 5 without talking to the gateway team: during
++an outage every extra attempt multiplies the load they have to shed.
+diff --git a/go.mod b/go.mod
+index 9398ea4..7d23335 100644
+--- a/go.mod
++++ b/go.mod
+@@ -6,4 +6,5 @@ require (
+ 	github.com/go-chi/chi/v5 v5.2.3
+ 	github.com/jackc/pgx/v5 v5.8.0
+ 	github.com/prometheus/client_golang v1.23.2
++	golang.org/x/sync v0.24.0
+ )
+diff --git a/go.sum b/go.sum
+index a8b62ac..ccf7f61 100644
+--- a/go.sum
++++ b/go.sum
+@@ -4,3 +4,5 @@ github.com/jackc/pgx/v5 v5.8.0 h1:TYPDoleBBme0xGSAX3/+NujXXtpZn9HBONkQC7IEZSo=
+ github.com/jackc/pgx/v5 v5.8.0/go.mod h1:QVeDInX2m9VyzvNeiCJVjCkNFqzsNb43204HshNSZKw=
+ github.com/prometheus/client_golang v1.23.2 h1:Je96obch5RDVy3FDMndoUsjAhG5Edi49h0RJWRi/o0o=
+ github.com/prometheus/client_golang v1.23.2/go.mod h1:Tb1a6LWHB3/SPIzCoaDXI4I8UHKeFTEQ1YCr+0Gyqmg=
++golang.org/x/sync v0.24.0 h1:DkdcpKMn0tR3SsWJ6rbfIzIBGSUkvlp1ZmWcQcZWdvA=
++golang.org/x/sync v0.24.0/go.mod h1:Czt+wKu1gCyEFDUtn0jG5QVvpJ6rzVqr5aXyt9drQfk=
+diff --git a/internal/charge/handler.go b/internal/charge/handler.go
+index f3b4c2b..38f393a 100644
+--- a/internal/charge/handler.go
++++ b/internal/charge/handler.go
+@@ -28,9 +28,15 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+ 	}
+ 	req.IdempotencyKey = r.Header.Get("Idempotency-Key")
+ 
+-	// Reject any key we have seen before.
+-	if !h.keys.Reserve(req.IdempotencyKey, req) {
+-		writeError(w, http.StatusConflict, "duplicate_request")
++	if req.IdempotencyKey == "" {
++		writeError(w, http.StatusBadRequest, "idempotency_key_required")
++		return
++	}
++	switch h.keys.Reserve(req.IdempotencyKey, req) {
++	case KeyReplayed:
++		// The client is retrying; the gateway deduplicates on the key.
++	case KeyConflict:
++		writeError(w, http.StatusConflict, "idempotency_key_reused")
+ 		return
+ 	}
+ 
+diff --git a/internal/charge/idempotency.go b/internal/charge/idempotency.go
+index 682fa4f..07b172d 100644
+--- a/internal/charge/idempotency.go
++++ b/internal/charge/idempotency.go
+@@ -8,6 +8,15 @@ import (
+ 	"github.com/acme/payments-api/internal/gateway"
+ )
+ 
++// KeyResult is the outcome of reserving an idempotency key.
++type KeyResult int
++
++const (
++	KeyNew      KeyResult = iota // first time this key is seen
++	KeyReplayed                  // seen before with the same payload
++	KeyConflict                  // seen before with a different payload
++)
++
+ // KeyStore remembers which idempotency keys have been used, and for what.
+ type KeyStore struct {
+ 	mu   sync.Mutex
+@@ -19,16 +28,22 @@ func NewKeyStore() *KeyStore {
+ 	return &KeyStore{seen: make(map[string][sha256.Size]byte)}
+ }
+ 
+-// Reserve records key for req and reports whether the key was new.
+-func (s *KeyStore) Reserve(key string, req gateway.ChargeRequest) bool {
++// Reserve records key for req and reports whether it was seen before.
++func (s *KeyStore) Reserve(key string, req gateway.ChargeRequest) KeyResult {
++	hash := payloadHash(req)
++
+ 	s.mu.Lock()
+ 	defer s.mu.Unlock()
+ 
+-	if _, ok := s.seen[key]; ok {
+-		return false
++	if prev, ok := s.seen[key]; ok {
++		// Same key and payload: a retry of a request we already accepted.
++		if prev == hash {
++			return KeyReplayed
++		}
++		return KeyConflict
+ 	}
+-	s.seen[key] = payloadHash(req)
+-	return true
++	s.seen[key] = hash
++	return KeyNew
+ }
+ 
+ // payloadHash identifies the content of a charge request.
+diff --git a/internal/config/config.go b/internal/config/config.go
+index 013bb16..621310d 100644
+--- a/internal/config/config.go
++++ b/internal/config/config.go
+@@ -13,6 +13,9 @@ type Config struct {
+ 	GatewayURL     string
+ 	GatewayAPIKey  string
+ 	GatewayTimeout time.Duration
++	// Retry settings for charges that time out; see docs/runbooks.
++	GatewayRetryAttempts int
++	GatewayRetryDelay    time.Duration
+ }
+ 
+ // Load reads the configuration, applying defaults for unset values.
+@@ -22,6 +25,9 @@ func Load() Config {
+ 		GatewayURL:     env("GATEWAY_URL", "https://gateway.internal"),
+ 		GatewayAPIKey:  os.Getenv("GATEWAY_API_KEY"),
+ 		GatewayTimeout: envDuration("GATEWAY_TIMEOUT", 10*time.Second),
++		// The delay doubles after every attempt.
++		GatewayRetryAttempts: envInt("GATEWAY_RETRY_ATTEMPTS", 3),
++		GatewayRetryDelay:    envDuration("GATEWAY_RETRY_DELAY", 200*time.Millisecond),
+ 	}
+ }
+ 
+diff --git a/internal/gateway/client.go b/internal/gateway/client.go
+index ee837b9..1e7b0df 100644
+--- a/internal/gateway/client.go
++++ b/internal/gateway/client.go
+@@ -20,18 +20,18 @@ type Doer interface {
+ 	Do(ctx context.Context, req *http.Request) (*http.Response, error)
+ }
+ 
+-// Client sends charge requests to the gateway. It is safe for
+-// concurrent use.
++// Client sends charge requests to the gateway. It is safe for concurrent use.
+ type Client struct {
+ 	baseURL string
+ 	apiKey  string
+ 	http    Doer
+ 	timeout time.Duration
++	retry   *Policy
+ }
+ 
+-// NewClient returns a Client for the gateway at baseURL.
+-func NewClient(baseURL, apiKey string, doer Doer, timeout time.Duration) *Client {
+-	return &Client{baseURL: baseURL, apiKey: apiKey, http: doer, timeout: timeout}
++// NewClient returns a Client that retries timed-out charges using policy.
++func NewClient(baseURL, apiKey string, doer Doer, timeout time.Duration, policy *Policy) *Client {
++	return &Client{baseURL: baseURL, apiKey: apiKey, http: doer, timeout: timeout, retry: policy}
+ }
+ 
+ // Charge submits a charge and returns the gateway's answer. The request is
+@@ -42,9 +42,22 @@ func (c *Client) Charge(ctx context.Context, req ChargeRequest) (*ChargeResponse
+ 	if err := req.Validate(); err != nil {
+ 		return nil, fmt.Errorf("validate charge: %w", err)
+ 	}
+-	resp, err := c.http.Do(ctx, c.newRequest(req))
++	var resp *http.Response
++	err := c.retry.Do(ctx, func(attempt int) error {
++		httpReq := c.newRequest(req)
++		httpReq.Header.Set(hdrIdemKey, req.IdempotencyKey)
++		var doErr error
++		resp, doErr = c.http.Do(ctx, httpReq)
++		if doErr != nil {
++			return retryable(doErr)
++		}
++		if resp.StatusCode == http.StatusGatewayTimeout {
++			return retryable(ErrGatewayTimeout)
++		}
++		return nil
++	})
+ 	if err != nil {
+-		return nil, fmt.Errorf("gateway charge: %w", err)
++		return nil, fmt.Errorf("gateway charge after %d attempts: %w", c.retry.Attempts(), err)
+ 	}
+ 	defer resp.Body.Close()
+ 
+@@ -53,18 +66,23 @@ func (c *Client) Charge(ctx context.Context, req ChargeRequest) (*ChargeResponse
+ 		return nil, fmt.Errorf("decode charge response: %w", err)
+ 	}
+ 	if resp.StatusCode >= 400 {
+-		return nil, &Error{Status: resp.StatusCode, Code: out.ErrorCode}
++		return nil, &Error{Status: resp.StatusCode, Code: out.ErrorCode, Tries: c.retry.Attempts()}
+ 	}
+ 	return &out, nil
+ }
+ 
++const (
++	hdrAuthorization = "Authorization"
++	hdrContentType   = "Content-Type"
++	hdrIdemKey       = "Idempotency-Key"
++)
++
+ // newRequest builds the HTTP request for a charge.
+ func (c *Client) newRequest(req ChargeRequest) *http.Request {
+ 	body, _ := json.Marshal(req)
+ 	httpReq, _ := http.NewRequest(http.MethodPost, c.baseURL+"/v1/charges", bytes.NewReader(body))
+-	httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
+-	httpReq.Header.Set("Content-Type", "application/json")
+-	// TODO(mira): send an idempotency key once the gateway supports it.
++	httpReq.Header.Set(hdrAuthorization, "Bearer "+c.apiKey)
++	httpReq.Header.Set(hdrContentType, "application/json")
+ 	return httpReq
+ }
+ 
+@@ -72,8 +90,26 @@ func (c *Client) newRequest(req ChargeRequest) *http.Request {
+ type Error struct {
+ 	Status int
+ 	Code   string
++	Tries  int
+ }
+ 
+ func (e *Error) Error() string {
+-	return fmt.Sprintf("gateway error %d: %s", e.Status, e.Code)
++	return fmt.Sprintf("gateway error %d: %s (after %d tries)", e.Status, e.Code, e.Tries)
++}
++
++// retryableError marks an error as safe to retry.
++type retryableError struct{ err error }
++
++func (e retryableError) Error() string { return e.err.Error() }
++func (e retryableError) Unwrap() error { return e.err }
++
++// retryable wraps err so that Policy.Do tries the call again.
++func retryable(err error) error {
++	return retryableError{err: err}
++}
++
++// IsRetryable reports whether err was marked with retryable.
++func IsRetryable(err error) bool {
++	var r retryableError
++	return errors.As(err, &r)
+ }
+diff --git a/internal/gateway/client_test.go b/internal/gateway/client_test.go
+index c537940..7470e1b 100644
+--- a/internal/gateway/client_test.go
++++ b/internal/gateway/client_test.go
+@@ -10,7 +10,8 @@ import (
+ 	"time"
+ )
+ 
+-// scriptedDoer answers each request with the next scripted response.
++// scriptedDoer answers each request with the next scripted response and
++// records the requests it was sent.
+ type scriptedDoer struct {
+ 	responses []scriptedResponse
+ 	requests  []*http.Request
+@@ -31,9 +32,14 @@ func (d *scriptedDoer) Do(_ context.Context, req *http.Request) (*http.Response,
+ 	return &http.Response{StatusCode: next.status, Body: io.NopCloser(strings.NewReader(next.body))}, nil
+ }
+ 
+-// newTestClient returns a Client that talks to doer.
++// newTestClient returns a Client that talks to doer and never sleeps.
+ func newTestClient(doer Doer) *Client {
+-	return NewClient("https://gateway.test", "key", doer, time.Second)
++	policy := &Policy{
++		MaxAttempts: 3,
++		BaseDelay:   time.Millisecond,
++		Sleep:       func(context.Context, time.Duration) error { return nil },
++	}
++	return NewClient("https://gateway.test", "key", doer, time.Second, policy)
+ }
+ 
+ func TestChargeSuccess(t *testing.T) {
+@@ -46,6 +52,9 @@ func TestChargeSuccess(t *testing.T) {
+ 	if got.ID != "ch_1" {
+ 		t.Errorf("ID = %q, want ch_1", got.ID)
+ 	}
++	if len(doer.requests) != 1 {
++		t.Errorf("sent %d requests, want 1", len(doer.requests))
++	}
+ }
+ 
+ func TestChargeGatewayError(t *testing.T) {
+@@ -57,8 +66,91 @@ func TestChargeGatewayError(t *testing.T) {
+ 	if !errors.As(err, &gwErr) || gwErr.Code != "card_declined" {
+ 		t.Fatalf("Charge() error = %v, want card_declined", err)
+ 	}
++	if len(doer.requests) != 1 {
++		t.Errorf("sent %d requests, want 1: a declined card must not be retried", len(doer.requests))
++	}
++}
++
++func TestChargeRetriesGatewayTimeout(t *testing.T) {
++	doer := &scriptedDoer{responses: []scriptedResponse{
++		{status: 504, body: `{}`},
++		{status: 504, body: `{}`},
++		{status: 200, body: `{"id":"ch_2","status":"captured"}`},
++	}}
++
++	got, err := newTestClient(doer).Charge(context.Background(), validRequest())
++	if err != nil {
++		t.Fatalf("Charge() error = %v", err)
++	}
++	if got.ID != "ch_2" || len(doer.requests) != 3 {
++		t.Fatalf("got charge %q after %d requests, want ch_2 after 3", got.ID, len(doer.requests))
++	}
++	// The delay between attempts is covered by TestPolicyDo.
++}
++
++func TestChargeSendsSameIdempotencyKeyOnEveryAttempt(t *testing.T) {
++	doer := &scriptedDoer{responses: []scriptedResponse{
++		{status: 504, body: `{}`},
++		{status: 200, body: `{"id":"ch_3","status":"captured"}`},
++	}}
++
++	if _, err := newTestClient(doer).Charge(context.Background(), validRequest()); err != nil {
++		t.Fatalf("Charge() error = %v", err)
++	}
++
++	for i, req := range doer.requests {
++		if got := req.Header.Get("Idempotency-Key"); got != "idem-7f3a" {
++			t.Errorf("request %d: Idempotency-Key = %q, want idem-7f3a", i+1, got)
++		}
++	}
++}
++
++func TestChargeGivesUpAfterThreeTimeouts(t *testing.T) {
++	doer := &scriptedDoer{responses: []scriptedResponse{
++		{status: 504, body: `{}`},
++		{status: 504, body: `{}`},
++		{status: 504, body: `{}`},
++	}}
++
++	_, err := newTestClient(doer).Charge(context.Background(), validRequest())
++
++	if !errors.Is(err, ErrGatewayTimeout) {
++		t.Fatalf("Charge() error = %v, want ErrGatewayTimeout", err)
++	}
++	if !strings.Contains(err.Error(), "after 3 attempts") {
++		t.Errorf("error %q does not say how many attempts were made", err)
++	}
++}
++
++func TestChargeRetriesTransportErrors(t *testing.T) {
++	doer := &scriptedDoer{responses: []scriptedResponse{
++		{err: errors.New("connection reset by peer")},
++		{status: 200, body: `{"id":"ch_4","status":"captured"}`},
++	}}
++
++	if _, err := newTestClient(doer).Charge(context.Background(), validRequest()); err != nil {
++		t.Fatalf("Charge() error = %v", err)
++	}
++}
++
++func TestChargeDoesNotRetryInvalidRequests(t *testing.T) {
++	doer := &scriptedDoer{}
++	req := validRequest()
++	req.AmountMinor = 0
++
++	if _, err := newTestClient(doer).Charge(context.Background(), req); err == nil {
++		t.Fatal("Charge() accepted a zero amount")
++	}
++	if len(doer.requests) != 0 {
++		t.Errorf("sent %d requests for an invalid charge, want 0", len(doer.requests))
++	}
+ }
+ 
+ func validRequest() ChargeRequest {
+-	return ChargeRequest{MerchantID: "m_1", AmountMinor: 1250, Currency: "EUR"}
++	return ChargeRequest{
++		MerchantID:     "m_1",
++		AmountMinor:    1250,
++		Currency:       "EUR",
++		IdempotencyKey: "idem-7f3a",
++	}
+ }
+diff --git a/internal/gateway/retry.go b/internal/gateway/retry.go
+new file mode 100644
+index 0000000..a7c8f3f
+--- /dev/null
++++ b/internal/gateway/retry.go
+@@ -0,0 +1,74 @@
++package gateway
++
++import (
++	"context"
++	"errors"
++	"sync"
++	"time"
++)
++
++// Policy retries a call that failed with a retryable error.
++//
++// The delay doubles after every attempt, starting at BaseDelay. A Policy is
++// safe for concurrent use; Attempts reports on the most recent call to Do.
++type Policy struct {
++	// MaxAttempts is the total number of tries, including the first.
++	MaxAttempts int
++	// BaseDelay is the wait before the second attempt.
++	BaseDelay time.Duration
++	// Sleep waits for d or until ctx is done. Tests replace it.
++	Sleep func(ctx context.Context, d time.Duration) error
++
++	mu       sync.Mutex
++	attempts int
++}
++
++// DefaultPolicy is the policy used in production: three attempts, the
++// second one 200ms after the first.
++func DefaultPolicy() *Policy {
++	return &Policy{MaxAttempts: 3, BaseDelay: 200 * time.Millisecond, Sleep: sleep}
++}
++
++// Do calls fn until it succeeds, returns an error that is not retryable,
++// runs out of attempts, or ctx is done. fn receives the attempt number,
++// starting at 1.
++//
++// The error from the last attempt is returned unchanged.
++func (p *Policy) Do(ctx context.Context, fn func(attempt int) error) error {
++	var err error
++	delay := p.BaseDelay
++	for attempt := 1; attempt <= p.MaxAttempts; attempt++ {
++		p.mu.Lock()
++		p.attempts = attempt
++		p.mu.Unlock()
++
++		if err = fn(attempt); err == nil || !IsRetryable(err) {
++			return err
++		}
++		if attempt == p.MaxAttempts {
++			break
++		}
++		if sleepErr := p.Sleep(ctx, delay); sleepErr != nil {
++			return errors.Join(err, sleepErr)
++		}
++		delay *= 2
++	}
++	return err
++}
++
++// Attempts returns how many times the most recent Do called its function.
++func (p *Policy) Attempts() int {
++	return p.attempts
++}
++
++// sleep is the production Sleep: it waits for d unless ctx ends first.
++func sleep(ctx context.Context, d time.Duration) error {
++	t := time.NewTimer(d)
++	defer t.Stop()
++	select {
++	case <-ctx.Done():
++		return ctx.Err()
++	case <-t.C:
++		return nil
++	}
++}
+diff --git a/internal/gateway/retry_test.go b/internal/gateway/retry_test.go
+new file mode 100644
+index 0000000..ff102cb
+--- /dev/null
++++ b/internal/gateway/retry_test.go
+@@ -0,0 +1,112 @@
++package gateway
++
++import (
++	"context"
++	"errors"
++	"testing"
++	"time"
++)
++
++// recordingSleep collects the delays a Policy asked for without waiting.
++type recordingSleep struct {
++	delays []time.Duration
++	err    error
++}
++
++func (r *recordingSleep) sleep(_ context.Context, d time.Duration) error {
++	r.delays = append(r.delays, d)
++	return r.err
++}
++
++func newTestPolicy(max int) (*Policy, *recordingSleep) {
++	rec := &recordingSleep{}
++	return &Policy{MaxAttempts: max, BaseDelay: 200 * time.Millisecond, Sleep: rec.sleep}, rec
++}
++
++func TestPolicyDo(t *testing.T) {
++	errBoom := errors.New("boom")
++
++	tests := []struct {
++		name         string
++		results      []error
++		wantErr      error
++		wantAttempts int
++		wantDelays   []time.Duration
++	}{
++		{
++			name:         "succeeds first time",
++			results:      []error{nil},
++			wantAttempts: 1,
++		},
++		{
++			name:         "retries a timeout and then succeeds",
++			results:      []error{retryable(ErrGatewayTimeout), nil},
++			wantAttempts: 2,
++			wantDelays:   []time.Duration{200 * time.Millisecond},
++		},
++		{
++			name:         "doubles the delay between attempts",
++			results:      []error{retryable(ErrGatewayTimeout), retryable(ErrGatewayTimeout), nil},
++			wantAttempts: 3,
++			wantDelays:   []time.Duration{200 * time.Millisecond, 400 * time.Millisecond},
++		},
++		{
++			name:         "gives up after the last attempt",
++			results:      []error{retryable(ErrGatewayTimeout), retryable(ErrGatewayTimeout), retryable(ErrGatewayTimeout)},
++			wantErr:      ErrGatewayTimeout,
++			wantAttempts: 3,
++			wantDelays:   []time.Duration{200 * time.Millisecond, 400 * time.Millisecond},
++		},
++		{
++			name:         "does not retry other errors",
++			results:      []error{errBoom},
++			wantErr:      errBoom,
++			wantAttempts: 1,
++		},
++	}
++
++	for _, tt := range tests {
++		t.Run(tt.name, func(t *testing.T) {
++			policy, rec := newTestPolicy(3)
++
++			err := policy.Do(context.Background(), func(attempt int) error {
++				return tt.results[attempt-1]
++			})
++
++			if !errors.Is(err, tt.wantErr) {
++				t.Errorf("Do() error = %v, want %v", err, tt.wantErr)
++			}
++			if got := policy.Attempts(); got != tt.wantAttempts {
++				t.Errorf("Attempts() = %d, want %d", got, tt.wantAttempts)
++			}
++			if len(rec.delays) != len(tt.wantDelays) {
++				t.Fatalf("slept %d times, want %d", len(rec.delays), len(tt.wantDelays))
++			}
++			for i, d := range rec.delays {
++				if d != tt.wantDelays[i] {
++					t.Errorf("delay %d = %v, want %v", i, d, tt.wantDelays[i])
++				}
++			}
++		})
++	}
++}
++
++// A cancelled context must end the retries at once, and the caller should
++// still be able to see why the last attempt failed.
++func TestPolicyDoStopsWhenContextEnds(t *testing.T) {
++	policy, rec := newTestPolicy(3)
++	rec.err = context.Canceled
++
++	calls := 0
++	err := policy.Do(context.Background(), func(int) error {
++		calls++
++		return retryable(ErrGatewayTimeout)
++	})
++
++	if calls != 1 || !errors.Is(err, context.Canceled) {
++		t.Errorf("called fn %d times with error %v, want 1 call and context.Canceled", calls, err)
++	}
++	if !errors.Is(err, ErrGatewayTimeout) {
++		t.Errorf("Do() error = %v, want it to keep the timeout as well", err)
++	}
++}

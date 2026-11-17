@@ -1,0 +1,40 @@
+ acme/payments-api #482   Retry idempotent charge requests on gateway timeouts                                     Open
+ mira-okafor wants to merge 6 commits into main from feature/retry-timeouts · updated 2h ago
+┌─ Diff ─────────────────────────────────────────────────────────────────────────────────────────────────── file 5/10 ─┐
+│ internal/gateway/client.go  M +48 -12                                                                       hunk 2/4 │
+├──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│        47 +         httpReq := c.newRequest(req)                                                                     │
+│        48 +         httpReq.Header.Set(hdrIdemKey, req.IdempotencyKey)                                               │
+│        49 +         var doErr error                                                                                  │
+│        50 +         resp, doErr = c.http.Do(ctx, httpReq)                                                            │
+│        51 +         if doErr != nil {                                                                                │
+│▌       52 +             return retryable(doErr)                                                                      │
+│        53 +         }                                                                                                │
+│        54 +         if resp.StatusCode == http.StatusGatewayTimeout {                                                │
+│        55 +             return retryable(ErrGatewayTimeout)                                                          │
+│        56 +         }                                                                                                │
+│        57 +         return nil                                                                                       │
+│        58 +     })                                                                                                   │
+│   46   59       if err != nil {                                                                                      │
+│   47      -         return nil, fmt.Errorf("gateway charge: %w", err)                                                │
+│        60 +         return nil, fmt.Errorf("gateway charge after %d attempts: %w", c.retry.Attempts(), err)          │
+│   48   61       }                                                                                                    │
+│   49   62       defer resp.Body.Close()                                                                              │
+│   50   63                                                                                                            │
+│ @@ -53,18 +66,23 @@ func (c *Client) Charge(ctx context.Context, req ChargeRequest) (*ChargeResponse                 │
+│   53   66           return nil, fmt.Errorf("decode charge response: %w", err)                                        │
+│   54   67       }                                                                                                    │
+│   55   68       if resp.StatusCode >= 400 {                                                                          │
+│   56      -         return nil, &Error{Status: resp.StatusCode, Code: out.ErrorCode}                                 │
+│        69 +         return nil, &Error{Status: resp.StatusCode, Code: out.ErrorCode, Tries: c.retry.Attempts()}      │
+│   57   70       }                                                                                                    │
+│   58   71       return &out, nil                                                                                     │
+│   59   72   }                                                                                                        │
+│   60   73                                                                                                            │
+│        74 + const (                                                                                                  │
+│        75 +     hdrAuthorization = "Authorization"                                                                   │
+│        76 +     hdrContentType   = "Content-Type"                                                                    │
+│        77 +     hdrIdemKey       = "Idempotency-Key"                                                                 │
+│        78 + )                                                                                                        │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+ j/k line · [ ] file · { } hunk · tab files · t tree · ? help · q quit

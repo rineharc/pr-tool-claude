@@ -1,0 +1,24 @@
+ acme/payments-api #482   Retry idempotent charge requests on gateway ti…  Open
+ mira-okafor wants to merge 6 commits into main from feature/retry-timeouts · u…
+┌─ Di┌─ Keys ────────────────────────────────────────────────────────────┐/10 ─┐
+│ int│  Move                                                             │ 2/4 │
+├────│  j / k, ↓ / ↑        Down / up                                    │─────┤
+│    │  g / G, home / end   Top / bottom                                 │     │
+│ @@ │  ctrl+d / ctrl+u     Half a page down / up                        │geRe…│
+│   4│  pgdn / pgup         Page down / up                               │     │
+│   4│                                                                   │     │
+│   4│  Files                                                            │     │
+│   4│  [ / ]               Previous / next file                         │     │
+│    │  { / }               Previous / next hunk                         │     │
+│    │  tab / shift+tab     Switch between the tree and the diff         │     │
+│    │  enter or l / h      Tree: open file or expand folder / collapse  │     │
+│    │  t                   Show / hide the file tree                    │     │
+│    │                                                                   │     │
+│    │  General                                                          │     │
+│    │  ?                   Show / hide this help                        │     │
+│▌   │  q, ctrl+c           Quit                                         │     │
+│    │                                                                   │     │
+│    │  ? or esc closes this help                                        │     │
+│    └───────────────────────────────────────────────────────────────────┘     │
+└──────────────────────────────────────────────────────────────────────────────┘
+ j/k line · [ ] file · { } hunk · tab files · t tree · ? help · q quit

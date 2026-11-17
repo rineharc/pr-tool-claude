@@ -1,0 +1,40 @@
+ acme/payments-api #482   Retry idempotent charge requests on gateway timeouts                                     Open
+ mira-okafor wants to merge 6 commits into main from feature/retry-timeouts · updated 2h ago
+┌─ Files ────────────────────────────────┐┌─ Diff ───────────────────────────────────────────────────────── file 5/10 ─┐
+│ 10 files                       +407 -25││ internal/gateway/client.go  M +48 -12                             hunk 2/4 │
+│                                        │├────────────────────────────────────────────────────────────────────────────┤
+│  ▾ docs/runbooks/                      ││             ↪ The request is                                               │
+│    A gateway-504.md             +38    ││ @@ -42,9 +42,22 @@ func (c *Client) Charge(ctx context.Context, req Charge…│
+│  ▾ internal/                           ││   42   42       if err := req.Validate(); err != nil {                     │
+│    ▾ charge/                           ││   43   43           return nil, fmt.Errorf("validate charge: %w", err)     │
+│      M handler.go                +9  -3││   44   44       }                                                          │
+│      M idempotency.go  ┌─ Keys ────────────────────────────────────────────────────────────┐equest(req))             │
+│    ▾ config/           │  Move                                                             │                         │
+│      M config.go       │  j / k, ↓ / ↑        Down / up                                    │t int) error {           │
+│    ▾ gateway/          │  g / G, home / end   Top / bottom                                 │                         │
+│▸     M client.go       │  ctrl+d / ctrl+u     Half a page down / up                        │ req.IdempotencyKey)     │
+│      M client_test.go  │  pgdn / pgup         Page down / up                               │                         │
+│      A retry.go        │                                                                   │ttpReq)                  │
+│      A retry_test.go   │  Files                                                            │                         │
+│  M go.mod              │  [ / ]               Previous / next file                         │                         │
+│  M go.sum              │  { / }               Previous / next hunk                         │                         │
+│                        │  tab / shift+tab     Switch between the tree and the diff         │tusGatewayTimeout {      │
+│                        │  enter or l / h      Tree: open file or expand folder / collapse  │yTimeout)                │
+│                        │  t                   Show / hide the file tree                    │                         │
+│                        │                                                                   │                         │
+│                        │  General                                                          │                         │
+│                        │  ?                   Show / hide this help                        │                         │
+│                        │  q, ctrl+c           Quit                                         │y charge: %w", err)      │
+│                        │                                                                   │y charge after %d        │
+│                        │  ? or esc closes this help                                        │pts(), err)              │
+│                        └───────────────────────────────────────────────────────────────────┘                         │
+│                                        ││   49   62       defer resp.Body.Close()                                    │
+│                                        ││   50   63                                                                  │
+│                                        ││ @@ -53,18 +66,23 @@ func (c *Client) Charge(ctx context.Context, req Charg…│
+│                                        ││   53   66           return nil, fmt.Errorf("decode charge response: %w",   │
+│                                        ││                     ↪ err)                                                 │
+│                                        ││   54   67       }                                                          │
+├────────────────────────────────────────┤│   55   68       if resp.StatusCode >= 400 {                                │
+│ M/A/D/R modified/added/deleted/renamed ││   56      -         return nil, &Error{Status: resp.StatusCode, Code:      │
+└────────────────────────────────────────┘└────────────────────────────────────────────────────────────────────────────┘
+ j/k line · [ ] file · { } hunk · tab files · t tree · ? help · q quit
